@@ -1,0 +1,52 @@
+FROM php:7.4-apache
+
+# 安装依赖
+RUN apt-get update && apt-get install -y \
+    mysql-client \
+    git \
+    curl \
+    libxml2-dev \
+    libpng-dev \
+    libjpeg62-turbo-dev \
+    libfreetype6-dev \
+    locales \
+    && rm -rf /var/lib/apt/lists/*
+
+# 配置PHP扩展
+RUN docker-php-ext-configure gd --with-freetype --with-jpeg && \
+    docker-php-ext-install \
+    mysqli \
+    pdo \
+    pdo_mysql \
+    xml \
+    gd \
+    zip \
+    mbstring
+
+# 启用Apache模块
+RUN a2enmod rewrite
+
+# 设置时区
+RUN echo "Asia/Shanghai" > /etc/timezone
+
+# 创建OrangeHRM目录
+WORKDIR /var/www/html
+
+# 下载OrangeHRM (最新版本)
+RUN git clone https://github.com/orangehrm/orangehrm.git . && \
+    git checkout stable-5.6 || git checkout master
+
+# 设置权限
+RUN chown -R www-data:www-data /var/www/html && \
+    chmod -R 755 /var/www/html
+
+# 复制自定义配置
+COPY docker/orangehrm.conf.php /var/www/html/config/orangehrm.conf.php || true
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost/ || exit 1
+
+EXPOSE 80
+
+CMD ["apache2-foreground"]
