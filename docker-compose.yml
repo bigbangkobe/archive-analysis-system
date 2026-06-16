@@ -1,0 +1,151 @@
+version: '3.8'
+
+services:
+  # MySQL数据库
+  mysql:
+    image: mysql:5.7
+    container_name: archive_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root123456
+      MYSQL_DATABASE: orangehrm
+      MYSQL_USER: orangehrm
+      MYSQL_PASSWORD: orangehrm123
+      TZ: 'Asia/Shanghai'
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./data/mysql:/var/lib/mysql
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - archive_network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # OrangeHRM管理系统
+  orangehrm:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.orangehrm
+    container_name: archive_orangehrm
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USERNAME: orangehrm
+      MYSQL_PASSWORD: orangehrm123
+      MYSQL_DATABASE: orangehrm
+      TZ: 'Asia/Shanghai'
+    ports:
+      - "8080:80"
+    volumes:
+      - ./data/orangehrm:/var/www/html
+      - ./data/uploads:/var/www/html/uploads
+    networks:
+      - archive_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  # OCR服务
+  ocr_service:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ocr
+    container_name: archive_ocr
+    ports:
+      - "8001:8000"
+    environment:
+      TZ: 'Asia/Shanghai'
+    volumes:
+      - ./services/ocr_service:/app
+      - ./data/uploads:/uploads
+      - ./models/paddleocr:/models
+    networks:
+      - archive_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  # 大模型服务 (Ollama)
+  llm_service:
+    image: ollama/ollama:latest
+    container_name: archive_llm
+    ports:
+      - "11434:11434"
+    environment:
+      TZ: 'Asia/Shanghai'
+    volumes:
+      - ./data/ollama:/root/.ollama
+    networks:
+      - archive_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+
+  # 分析中间件服务
+  analysis_service:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.analysis
+    container_name: archive_analysis
+    depends_on:
+      mysql:
+        condition: service_healthy
+      ocr_service:
+        condition: service_healthy
+      llm_service:
+        condition: service_healthy
+    ports:
+      - "8002:8000"
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USERNAME: orangehrm
+      MYSQL_PASSWORD: orangehrm123
+      MYSQL_DATABASE: orangehrm
+      OCR_SERVICE_URL: http://ocr_service:8000
+      LLM_SERVICE_URL: http://llm_service:11434
+      TZ: 'Asia/Shanghai'
+    volumes:
+      - ./services/analysis_service:/app
+      - ./data/uploads:/uploads
+    networks:
+      - archive_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+networks:
+  archive_network:
+    driver: bridge
+
+volumes:
+  mysql_data:
+    driver: local
+  orangehrm_data:
+    driver: local
+  ollama_data:
+    driver: local
